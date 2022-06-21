@@ -488,7 +488,11 @@ class App(object):
         self.box.body.append(ActionButton('COPY PASSWORD', self.call_pass,
                                           (path, True, False)))
         
-        copiable_keys = self.get_copiable_keys(path)
+        pass_entry = self.get_pass_entry(path)
+        if pass_entry is None:
+            return
+
+        copiable_keys = pass_entry['copiable_keys']
 
         for key in copiable_keys: 
             self.box.body.append(ActionButton(f'COPY {key.upper()}', self.call_pass,
@@ -498,13 +502,14 @@ class App(object):
                                           (path, True, True)))
         self.box.body.append(ActionButton('GENERATE NEW PASSWORD', self.generate_password, (path, 16, True, True)))
 
-    def get_copiable_keys(self, path):
+    def get_pass_entry(self, path):
         pargs = ['pass', path]
         p = subprocess.Popen(pargs, stdout=subprocess.PIPE,
                              stderr=subprocess.PIPE)
         stdout, stderr = p.communicate()
 
         copiable_keys = []
+        copiable_entries = {}
 
         if p.returncode == 0:
             try:
@@ -515,9 +520,21 @@ class App(object):
             for index, line in enumerate(text.split('\n')):
                 entry = line.split(': ', 1)
                 if len(entry) > 1:
+                    copiable_entries[entry[0]] = entry[1]
                     copiable_keys.append(entry[0])
+        else:
+            self._clear_box()
+            self.box.body.append(urwid.Text(('error', 'ERROR')))
+            self.box.body.append(urwid.Text(('error', stderr.strip())))
+            self.box.body.append(BackButton('BACK TO DIRECTORY', self.dir_load,os.path.dirname(self.current) or '.', self))
+            self.box.set_focus(2)
+            return None
 
-        return copiable_keys
+        return {
+                "copiable_keys": copiable_keys, 
+                "copiable_entries": copiable_entries,
+                "text": text.strip()
+                }
 
     def call_pass(self, originator, args):
         """Call pass to get a password."""
@@ -527,67 +544,42 @@ class App(object):
         copymsg = ' and copying output afterwards' if copy else ''
         self.mode = 'call_pass'
         self._clear_box()
-        self.box.body.append(urwid.AttrMap(
-            urwid.Text('Calling {0}{1}'.format(' '.join(pargs), copymsg)),
-            'highlight'))
         self.loop.draw_screen()
-        p = subprocess.Popen(pargs, stdout=subprocess.PIPE,
-                             stderr=subprocess.PIPE)
-        stdout, stderr = p.communicate()
-        if p.returncode == 0:
-            self._clear_box()
-            try:
-                text = stdout.decode('utf-8')
-            except AttributeError:
-                text = stdout
 
-            copiable_entries = {}
-            copiable_keys = []
+        pass_entry = self.get_pass_entry(self.current)
+        if pass_entry == None:
+            return
 
-            for index, line in enumerate(text.split('\n')):
-                entry = line.split(': ', 1)
-                if len(entry) > 1:
-                    copiable_entries[entry[0]] = entry[1]
-                    copiable_keys.append(entry[0])
+        text = pass_entry['text']
+        copiable_keys = pass_entry['copiable_keys']
+        copiable_entries = pass_entry['copiable_entries']
+        
+        if copy:
+            if copy_key is False:  # False: copy first line
+                copytarget = text.split('\n', 1)[0]
+                copy_key = 'PASSWORD'
+            elif copy_key is True:  # True: copy everything
+                copytarget = text
+                copy_key = 'everything'
+            else:  # string: copy whatever is passed
+                copytarget = copiable_entries[copy_key]
 
-            if copy:
-                if copy_key is False:  # False: copy first line
-                    copytarget = text.split('\n', 1)[0]
-                    copy_key = 'PASSWORD'
-                elif copy_key is True:  # True: copy everything
-                    copytarget = text
-                    copy_key = 'everything'
-                else:  # string: copy whatever is passed
-                    copytarget = copiable_entries[copy_key]
+            pyperclip.copy(copytarget)
+            self.box.body.append(urwid.AttrMap(urwid.Text('Copied {0} to clipboard.'.format(copy_key.upper())),'highlight'))
+            self.pass_load(None, self.current, False)
+            self.box.set_focus(2)
+            return
 
-                pyperclip.copy(copytarget)
-                self.box.body.append(
-                    urwid.AttrMap(
-                        urwid.Text('Copied {0} to clipboard.'.format(copy_key.upper())),
-                        'highlight'))
-                self.pass_load(None, self.current, False)
-                self.box.set_focus(1)
-                return
- #               self.box.body.append(ActionButton('DISPLAY', self.call_pass,
- #                                         (self.current, False, None)))
-            else:
-                self.box.body.append(urwid.Text(text.strip()))
-
-            self.box.body.append(BackButton('BACK TO PASSWORD', self.pass_load, self.current, self))
-            self.box.body.append(BackButton('BACK TO DIRECTORY', self.dir_load,os.path.dirname(self.current) or '.', self))
-            self.box.body.append(ActionButton('COPY PASSWORD', self.call_pass,
-                                              (self.current, True, False)))
-            self.box.body.append(ActionButton('COPY EVERYTHING', self.call_pass,
-                                              (self.current, True, True)))
-
-            for k in copiable_keys:
-                self.box.body.append(ActionButton('COPY {0}'.format(k.upper()), self.call_pass,
-                                                  (self.current, True, k)))
         else:
-            self.box.body.append(urwid.Text(('error', 'ERROR')))
-            self.box.body.append(
-                urwid.Text(('error', stderr.strip())))
-            self.box.body.append(BackButton('BACK TO DIRECTORY', self.dir_load,os.path.dirname(self.current) or '.', self))
+            self.box.body.append(urwid.Text(text.strip()))
+
+        self.box.body.append(BackButton('BACK TO PASSWORD', self.pass_load, self.current, self))
+        self.box.body.append(BackButton('BACK TO DIRECTORY', self.dir_load,os.path.dirname(self.current) or '.', self))
+        self.box.body.append(ActionButton('COPY PASSWORD', self.call_pass,(self.current, True, False)))
+        self.box.body.append(ActionButton('COPY EVERYTHING', self.call_pass,(self.current, True, True)))
+
+        for k in copiable_keys:
+            self.box.body.append(ActionButton('COPY {0}'.format(k.upper()), self.call_pass,(self.current, True, k)))
 
         self.box.set_focus(1)
 
